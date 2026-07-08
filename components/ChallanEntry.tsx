@@ -2,11 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { db } from "../lib/firebase";
-import { collection, addDoc, getDocs, query, where, orderBy } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, where, orderBy, doc, deleteDoc } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
 import { 
-  UserPlus, Search, Clipboard, Trash2, Edit2, Save, Printer, Plus, X, History 
+  UserPlus, Search, Clipboard, Trash2, Edit2, Save, Printer, Plus, X, History, Download 
 } from "lucide-react";
+
+// Dynamic Client-Side Import for html2pdf.js to prevent Next.js SSR issues
+import dynamic from "next/dynamic";
 
 interface VehicleOwner {
   id?: string;
@@ -76,7 +79,6 @@ export default function ChallanEntry() {
   const [challansList, setChallansList] = useState<ChallanLineItem[]>([]);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
-  // Voucher History Repository
   const [voucherHistory, setVoucherHistory] = useState<any[]>([]);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [refreshHistoryTrigger, setRefreshHistoryTrigger] = useState(0);
@@ -94,7 +96,6 @@ export default function ChallanEntry() {
     setVoucherNo("FPV-" + Math.floor(100000 + Math.random() * 900000));
   }, [selectedOwner]);
 
-  // Sync Master Data & History Records
   useEffect(() => {
     const fetchMastersAndHistory = async () => {
       if (!user?.uid) return; 
@@ -159,7 +160,7 @@ export default function ChallanEntry() {
 
     const freightWt = Math.min(cWt, rWt);
     const freightAmt = freightWt * rate;
-    const discountAmt = freightAmt * 0.03; // Flat 3% Margin on Gross Freight
+    const discountAmt = freightAmt * 0.03; 
     const tds = freightAmt * 0.01; 
     
     const deductions = (Number(row.diesel) || 0) + (Number(row.cash) || 0) + 
@@ -210,6 +211,17 @@ export default function ChallanEntry() {
     setTruckSearch(challansList[index].truckNo);
   };
 
+  const handleDeleteVoucher = async (docId: string) => {
+    if (!window.confirm("Are you sure you want to permanently delete this voucher log?")) return;
+    try {
+      await deleteDoc(doc(db, "challans", docId));
+      alert("Voucher Deleted successfully!");
+      setRefreshHistoryTrigger(prev => prev + 1);
+    } catch (err) {
+      alert("Failed to delete document.");
+    }
+  };
+
   const handleFinalVoucherSubmit = async () => {
     if (!user?.uid) return;
     if (!selectedOwner || !selectedParty || challansList.length === 0) {
@@ -246,9 +258,11 @@ export default function ChallanEntry() {
 
     try {
       await addDoc(collection(db, "challans"), finalVoucherData);
-      spoolSilentLandscapePDF(finalVoucherData);
+      
+      // Submit होते ही एंड्रॉइड-फ्रेंडली PDF जनरेट करें
+      generateProperPDF(finalVoucherData);
 
-      alert("Voucher Saved To Cloud & Receipt Sent to Spooler!");
+      alert("Voucher Saved & Professional PDF Downloaded!");
       setChallansList([]);
       setSelectedOwner(null);
       setSelectedParty(null);
@@ -262,110 +276,112 @@ export default function ChallanEntry() {
     }
   };
 
-  const spoolSilentLandscapePDF = (voucher: any) => {
+  // 🔥 HIGHLY COMPATIBLE HTML2PDF ENGINE FOR MOBILE & DESKTOP (No UI distortion)
+  const generateProperPDF = async (voucher: any) => {
+    // Dynamically require html2pdf to prevent compilation crash on server-side
+    const html2pdf = (await import("html2pdf.js")).default;
+
     const rowsHtml = voucher.items.map((item: any) => {
       const totalAdvance = (Number(item.diesel) || 0) + (Number(item.cash) || 0) + (Number(item.advance) || 0);
       return `
         <tr style="border-bottom: 1px solid #CBD5E1; font-size: 11px;">
-          <td style="padding: 6px 8px; font-weight: bold; text-transform: uppercase;">${item.truckNo}</td>
-          <td style="padding: 6px 8px;">${item.challanNo}</td>
-          <td style="padding: 6px 8px;">${item.challanDate}</td>
-          <td style="padding: 6px 8px; text-transform: capitalize;">${item.route || "-"}</td>
-          <td style="padding: 6px 8px; text-align: right;">${item.challanWt} / ${item.recdWt}</td>
-          <td style="padding: 6px 8px; text-align: right; font-weight: bold;">${item.freightWt} MT</td>
-          <td style="padding: 6px 8px; text-align: right;">₹${item.rate}</td>
-          <td style="padding: 6px 8px; text-align: right; font-weight: bold;">₹${item.freightAmt.toLocaleString("en-IN")}</td>
-          <td style="padding: 6px 8px; text-align: right; color: #DC2626;">${item.shortageWt > 0 ? `₹${item.shortageAmt}` : '-'}</td>
-          <td style="padding: 6px 8px; text-align: right; color: #2563EB; font-weight: bold;">₹${totalAdvance.toLocaleString("en-IN")}</td>
-          <td style="padding: 6px 8px; text-align: right; color: #D97706;">₹${item.discountAmt.toLocaleString("en-IN")}</td>
-          <td style="padding: 6px 8px; text-align: right; color: #475569;">₹${item.tds.toLocaleString("en-IN")}</td>
-          <td style="padding: 6px 8px; text-align: right; font-weight: 900; color: #0A192F; background: #F1F5F9;">₹${item.payableAmt.toLocaleString("en-IN")}</td>
+          <td style="padding: 8px; font-weight: bold; text-transform: uppercase;">${item.truckNo}</td>
+          <td style="padding: 8px;">${item.challanNo}</td>
+          <td style="padding: 8px;">${item.challanDate}</td>
+          <td style="padding: 8px; text-transform: capitalize;">${item.route || "-"}</td>
+          <td style="padding: 8px; text-align: right;">${item.challanWt} / ${item.recdWt}</td>
+          <td style="padding: 8px; text-align: right; font-weight: bold;">${item.freightWt} MT</td>
+          <td style="padding: 8px; text-align: right;">₹${item.rate}</td>
+          <td style="padding: 8px; text-align: right; font-weight: bold;">₹${item.freightAmt.toLocaleString("en-IN")}</td>
+          <td style="padding: 8px; text-align: right; color: #DC2626;">${item.shortageWt > 0 ? `₹${item.shortageAmt}` : '-'}</td>
+          <td style="padding: 8px; text-align: right; color: #2563EB; font-weight: bold;">₹${totalAdvance.toLocaleString("en-IN")}</td>
+          <td style="padding: 8px; text-align: right; color: #D97706;">₹${item.discountAmt.toLocaleString("en-IN")}</td>
+          <td style="padding: 8px; text-align: right; color: #475569;">₹${item.tds.toLocaleString("en-IN")}</td>
+          <td style="padding: 8px; text-align: right; font-weight: 900; color: #0A192F; background: #F1F5F9;">₹${item.payableAmt.toLocaleString("en-IN")}</td>
         </tr>
       `;
     }).join("");
 
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "absolute";
-    iframe.style.width = "0px";
-    iframe.style.height = "0px";
-    iframe.style.border = "none";
-    document.body.appendChild(iframe);
-
-    const docFrame = iframe.contentWindow?.document || iframe.contentDocument;
-    if (!docFrame) return;
-
-    docFrame.write(`
-      <html>
-        <head>
-          <style>
-            @page { size: A4 landscape; margin: 15mm; }
-            body { font-family: sans-serif; color: #0A192F; margin: 0; }
-            .meta-wrapper { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
-            .meta-cell { width: 50%; vertical-align: top; }
-            .meta-block { background: #F8FAFC; border: 1px solid #E2E8F0; padding: 12px; border-radius: 8px; margin-right: 10px; min-h: 90px; }
-            .meta-block-right { background: #F8FAFC; border: 1px solid #E2E8F0; padding: 12px; border-radius: 8px; margin-left: 10px; min-h: 90px; }
-            .meta-title { font-size: 10px; font-weight: bold; color: #0284C7; text-transform: uppercase; margin-bottom: 4px; }
-            .data-matrix { width: 100%; border-collapse: collapse; margin-top: 15px; }
-            .data-matrix th { background: #0A192F; color: white; padding: 8px; font-size: 10px; text-transform: uppercase; }
-            .summary-table { width: 280px; float: right; margin-top: 20px; border-collapse: collapse; }
-            .summary-table td { padding: 4px 8px; font-size: 11px; font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 15px;">
-            <span style="font-size: 18px; font-weight: 900;">FREIGHT DISCOUNTING TRANSACTION ADVICE</span>
-            <div style="font-size: 11px; font-weight: bold;">
-              Voucher No: <span style="color: #0284C7; font-size: 12px;">${voucher.voucherNo}</span> | Dated: ${new Date(voucher.createdAt).toLocaleDateString('en-IN')}
-            </div>
+    const printElement = document.createElement("div");
+    printElement.innerHTML = `
+      <div style="font-family: sans-serif; color: #0A192F; padding: 20px; background: #fff; width: 1040px; margin: 0 auto;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 15px; border-bottom: 3px solid #0A192F; padding-bottom: 8px;">
+          <span style="font-size: 22px; font-weight: 900; letter-spacing: -0.5px; color: #0A192F;">FREIGHT DISCOUNTING ADVICE</span>
+          <div style="font-size: 12px; font-weight: bold;">
+            Voucher No: <span style="color: #0284C7; font-size: 13px; font-family: monospace;">${voucher.voucherNo}</span> | Dated: ${new Date(voucher.createdAt).toLocaleDateString('en-IN')}
           </div>
-          <table class="meta-wrapper">
-            <tr>
-              <td class="meta-cell">
-                <div class="meta-block">
-                  <div class="meta-title">Issued By</div>
-                  <div style="font-size: 13px; font-weight: bold;">${profile?.firmName || 'Corporate Partner'}</div>
-                  <div style="font-size: 11px; color: #475569; margin-top: 2px;">PAN: ${profile?.panNumber || '-'} | Mob: ${profile?.mobileNumber || '-'}</div>
-                </div>
-              </td>
-              <td class="meta-cell">
-                <div class="meta-block-right">
-                  <div class="meta-title">Vehicle Owner</div>
-                  <div style="font-size: 13px; font-weight: bold;">${voucher.ownerName}</div>
-                  <div style="font-size: 11px; color: #475569; margin-top: 2px;">PAN: ${voucher.ownerPan} | Mob: ${voucher.ownerMobile || '-'}</div>
-                </div>
-              </td>
-            </tr>
-          </table>
-          <table class="data-matrix">
-            <thead>
-              <tr>
-                <th style="text-align: left;">Truck Plate</th><th style="text-align: left;">Challan No</th><th style="text-align: left;">Date</th><th style="text-align: left;">Route</th><th style="text-align: right;">Ch / Rec Wt</th><th style="text-align: right;">Fr Wt</th><th style="text-align: right;">Rate</th><th style="text-align: right;">Gross Freight</th><th style="text-align: right;">Shortage</th><th style="text-align: right;">Total Adv</th><th style="text-align: right;">Discount</th><th style="text-align: right;">TDS</th><th style="text-align: right; background: #0284C7;">Net Payable</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-          <table class="summary-table">
-            <tr><td style="color:#64748B;">Gross Freight Sum:</td><td style="text-align:right;">₹${voucher.totalGrossFreight.toLocaleString("en-IN")}</td></tr>
-            <tr><td style="color:#D97706;">Discount Income (3%):</td><td style="text-align:right; color:#D97706;">- ₹${voucher.totalDiscountIncome.toLocaleString("en-IN")}</td></tr>
-            <tr><td style="color:#DC2626;">Shortage Claims Deducted:</td><td style="text-align:right; color:#DC2626;">- ₹${voucher.totalShortageAmt.toLocaleString("en-IN")}</td></tr>
-            <tr style="border-top: 2px solid #0A192F; font-size: 13px;"><td style="padding-top:6px; color:#0A192F;">Net Remittance:</td><td style="text-align:right; padding-top:6px; font-size:14px; color:#0A192F;">₹${voucher.totalPayableToVehicle.toLocaleString("en-IN")}</td></tr>
-          </table>
-        </body>
-      </html>
-    `);
-    docFrame.close();
+        </div>
+        
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+          <tr>
+            <td style="width: 50%; vertical-align: top; padding-right: 10px;">
+              <div style="background: #F8FAFC; border: 1px solid #E2E8F0; padding: 12px; border-radius: 8px; min-height: 80px;">
+                <div style="font-size: 10px; font-weight: bold; color: #0284C7; text-transform: uppercase; margin-bottom: 4px;">Issued By</div>
+                <div style="font-size: 14px; font-weight: bold;">${profile?.firmName || 'Corporate Partner'}</div>
+                <div style="font-size: 11px; color: #475569; margin-top: 2px;">PAN: ${profile?.panNumber || '-'} | Mob: ${profile?.mobileNumber || '-'}</div>
+              </div>
+            </td>
+            <td style="width: 50%; vertical-align: top; padding-left: 10px;">
+              <div style="background: #F8FAFC; border: 1px solid #E2E8F0; padding: 12px; border-radius: 8px; min-height: 80px;">
+                <div style="font-size: 10px; font-weight: bold; color: #0284C7; text-transform: uppercase; margin-bottom: 4px;">Vehicle Owner</div>
+                <div style="font-size: 14px; font-weight: bold;">${voucher.ownerName}</div>
+                <div style="font-size: 11px; color: #475569; margin-top: 2px;">PAN: ${voucher.ownerPan} | Mob: ${voucher.ownerMobile || '-'}</div>
+              </div>
+            </td>
+          </tr>
+        </table>
 
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      document.body.removeChild(iframe); 
-    }, 500);
+        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+          <thead>
+            <tr style="background: #0A192F; color: white;">
+              <th style="padding: 10px; font-size: 10px; text-align: left; text-transform: uppercase;">Truck Plate</th>
+              <th style="padding: 10px; font-size: 10px; text-align: left; text-transform: uppercase;">Challan No</th>
+              <th style="padding: 10px; font-size: 10px; text-align: left; text-transform: uppercase;">Date</th>
+              <th style="padding: 10px; font-size: 10px; text-align: left; text-transform: uppercase;">Route</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">Ch / Rec Wt</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">Fr Wt</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">Rate</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">Gross Freight</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">Shortage</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">Total Adv</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">Discount</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase;">TDS</th>
+              <th style="padding: 10px; font-size: 10px; text-align: right; text-transform: uppercase; background: #0284C7;">Net Payable</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+
+        <div style="width: 300px; float: right; margin-top: 20px;">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr><td style="padding: 4px; font-size: 11px; color:#64748B; font-weight: bold;">Gross Freight Sum:</td><td style="text-align:right; font-weight: bold; font-size: 11px;">₹${voucher.totalGrossFreight.toLocaleString("en-IN")}</td></tr>
+            <tr><td style="padding: 4px; font-size: 11px; color:#D97706; font-weight: bold;">Discount Income (3%):</td><td style="text-align:right; color:#D97706; font-weight: bold; font-size: 11px;">- ₹${voucher.totalDiscountIncome.toLocaleString("en-IN")}</td></tr>
+            <tr><td style="padding: 4px; font-size: 11px; color:#DC2626; font-weight: bold;">Shortage Deductions:</td><td style="text-align:right; color:#DC2626; font-weight: bold; font-size: 11px;">- ₹${voucher.totalShortageAmt.toLocaleString("en-IN")}</td></tr>
+            <tr style="border-top: 2px solid #0A192F; font-size: 13px;"><td style="padding: 8px 4px 0 4px; color:#0A192F; font-weight: bold;">Net Remittance:</td><td style="text-align:right; padding: 8px 4px 0 4px; font-size:15px; color:#0A192F; font-weight: 900;">₹${voucher.totalPayableToVehicle.toLocaleString("en-IN")}</td></tr>
+          </table>
+        </div>
+        <div style="clear: both;"></div>
+        <p style="text-align: center; margin-top: 35px; font-size: 10px; font-weight: bold; color: #94A3B8; letter-spacing: 1px;">⚡ POWERED BY FREIGHTPAY LOGISTICS ERP SUITE</p>
+      </div>
+    `;
+
+    // Config options for high quality landscape rendering
+    const opt = {
+      margin: 10,
+      filename: `${voucher.voucherNo}_Advice.pdf`,
+      image: { type: 'jpeg' as const,quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' as const}
+    };
+
+    // Execute conversion and secure local mobile triggers
+    html2pdf().from(printElement).set(opt).save();
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-3 pb-12 text-[12px] p-4">
+    <div className="w-full max-w-5xl mx-auto space-y-3 pb-12 text-[12px] p-2 sm:p-4">
       
-      {/* SEARCH CONTROLS */}
+      {/* SEARCH MECHANICS */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm relative">
           <div className="flex justify-between items-center mb-1">
@@ -398,7 +414,7 @@ export default function ChallanEntry() {
             {isPartyDropdown && searchParty && (
               <div className="absolute left-0 right-0 mt-1 bg-white border rounded-xl shadow-xl z-50 max-h-36 overflow-y-auto divide-y">
                 {partiesPool.filter(p => p.name.toLowerCase().includes(searchParty.toLowerCase())).map(p => (
-                  <div key={p.id} onClick={() => { setSelectedParty(p); setSearchParty(p.name); setIsPartyDropdown(false); }} className="p-2.5 hover:bg-slate-50 cursor-pointer font-bold text-xs">{p.name}</div>
+                  <div key={p.id} onClick={() => { setSelectedParty(p); setSearchParty(p.name); setIsPartyDropdown(false); }} className="p-2.5 hover:bg-slate-50/60 cursor-pointer font-bold text-xs">{p.name}</div>
                 ))}
               </div>
             )}
@@ -408,21 +424,21 @@ export default function ChallanEntry() {
 
       {/* MATRIX FRAME GRID */}
       {selectedOwner && selectedParty && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-fade-in">
-          <div className="bg-brand-navy p-2 text-white flex justify-between items-center text-[11px]">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-brand-navy p-2 text-white flex justify-between items-center">
             <span className="font-black flex items-center gap-1"><Clipboard size={13} className="text-brand-cyan" /> {editingIndex !== null ? "Editing Row" : "Voucher Frame Grid"}</span>
             <span className="bg-white/10 px-2 py-0.5 rounded font-mono font-black text-brand-cyan">{voucherNo}</span>
           </div>
 
           <div className="p-3 bg-slate-50/60 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 border-b relative">
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Challan Date</label><input type="date" value={currentChallan.challanDate} onChange={(e) => setCurrentChallan({...currentChallan, challanDate: e.target.value})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Route Profile</label><input type="text" placeholder="Ksm-Kothari" value={currentChallan.route || ""} onChange={(e) => setCurrentChallan({...currentChallan, route: e.target.value})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Challan No *</label><input type="text" placeholder="257011" value={currentChallan.challanNo || ""} onChange={(e) => setCurrentChallan({...currentChallan, challanNo: e.target.value})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold text-brand-blue" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Bilty No</label><input type="text" placeholder="BL-992" value={currentChallan.biltyNo || ""} onChange={(e) => setCurrentChallan({...currentChallan, biltyNo: e.target.value})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Challan Date</label><input type="date" value={currentChallan.challanDate} onChange={(e) => setCurrentChallan({...currentChallan, challanDate: e.target.value})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Route Profile</label><input type="text" placeholder="Ksm-Kothari" value={currentChallan.route || ""} onChange={(e) => setCurrentChallan({...currentChallan, route: e.target.value})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Challan No *</label><input type="text" placeholder="257011" value={currentChallan.challanNo || ""} onChange={(e) => setCurrentChallan({...currentChallan, challanNo: e.target.value})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none text-brand-blue" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Bilty No</label><input type="text" placeholder="BL-992" value={currentChallan.biltyNo || ""} onChange={(e) => setCurrentChallan({...currentChallan, biltyNo: e.target.value})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
             
             <div className="relative">
               <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Truck No *</label>
-              <input type="text" placeholder="Type Plate..." value={truckSearch} onFocus={() => setIsTruckDropdown(true)} onChange={(e) => { setTruckSearch(e.target.value); setCurrentChallan({...currentChallan, truckNo: e.target.value.toUpperCase()}); setIsTruckDropdown(true); }} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-black uppercase text-slate-800" />
+              <input type="text" placeholder="Type Plate..." value={truckSearch} onFocus={() => setIsTruckDropdown(true)} onChange={(e) => { setTruckSearch(e.target.value); setCurrentChallan({...currentChallan, truckNo: e.target.value.toUpperCase()}); setIsTruckDropdown(true); }} className="w-full border rounded-md p-1 bg-white text-[11px] font-black uppercase text-slate-800 focus:outline-none" />
               {isTruckDropdown && (
                 <div className="absolute left-0 right-0 mt-1 bg-white border rounded shadow-xl z-50 max-h-32 overflow-y-auto divide-y">
                   {selectedOwner.vehicles.filter(v => v.toLowerCase().includes(truckSearch.toLowerCase())).map((v, idx) => (
@@ -432,15 +448,15 @@ export default function ChallanEntry() {
               )}
             </div>
 
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Challan Wt</label><input type="number" placeholder="37.28" value={currentChallan.challanWt || ""} onChange={(e) => setCurrentChallan({...currentChallan, challanWt: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Recd Wt</label><input type="number" placeholder="37.28" value={currentChallan.recdWt || ""} onChange={(e) => setCurrentChallan({...currentChallan, recdWt: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Rate (₹)</label><input type="number" placeholder="380" value={currentChallan.rate || ""} onChange={(e) => setCurrentChallan({...currentChallan, rate: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold text-emerald-600" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Shortage Rate</label><input type="number" placeholder="4" value={currentChallan.shortageRate || ""} onChange={(e) => setCurrentChallan({...currentChallan, shortageRate: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold text-red-500" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Diesel Adv</label><input type="number" value={currentChallan.diesel || ""} onChange={(e) => setCurrentChallan({...currentChallan, diesel: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold text-amber-600" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Cash Adv</label><input type="number" value={currentChallan.cash || ""} onChange={(e) => setCurrentChallan({...currentChallan, cash: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Office Adv</label><input type="number" value={currentChallan.advance || ""} onChange={(e) => setCurrentChallan({...currentChallan, advance: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Munsi Charge</label><input type="number" value={currentChallan.munsi || ""} onChange={(e) => setCurrentChallan({...currentChallan, munsi: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
-            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Other</label><input type="number" value={currentChallan.other || ""} onChange={(e) => setCurrentChallan({...currentChallan, other: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white focus:outline-none text-[11px] font-bold" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Challan Wt</label><input type="number" placeholder="37.28" value={currentChallan.challanWt || ""} onChange={(e) => setCurrentChallan({...currentChallan, challanWt: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Recd Wt</label><input type="number" placeholder="37.28" value={currentChallan.recdWt || ""} onChange={(e) => setCurrentChallan({...currentChallan, recdWt: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Rate (₹)</label><input type="number" placeholder="380" value={currentChallan.rate || ""} onChange={(e) => setCurrentChallan({...currentChallan, rate: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none text-emerald-600" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Shortage Rate</label><input type="number" placeholder="4" value={currentChallan.shortageRate || ""} onChange={(e) => setCurrentChallan({...currentChallan, shortageRate: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none text-red-500" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Diesel Adv</label><input type="number" value={currentChallan.diesel || ""} onChange={(e) => setCurrentChallan({...currentChallan, diesel: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none text-amber-600" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Cash Adv</label><input type="number" value={currentChallan.cash || ""} onChange={(e) => setCurrentChallan({...currentChallan, cash: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none text-amber-600" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Office Adv</label><input type="number" value={currentChallan.advance || ""} onChange={(e) => setCurrentChallan({...currentChallan, advance: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Munsi Charge</label><input type="number" value={currentChallan.munsi || ""} onChange={(e) => setCurrentChallan({...currentChallan, munsi: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
+            <div><label className="text-[9px] font-bold text-slate-400 block mb-0.5">Other</label><input type="number" value={currentChallan.other || ""} onChange={(e) => setCurrentChallan({...currentChallan, other: parseFloat(e.target.value) || 0})} className="w-full border rounded-md p-1 bg-white text-[11px] font-bold focus:outline-none" /></div>
 
             <div className="flex items-end">
               <button type="button" onClick={handleQueueRow} className="w-full bg-brand-blue hover:bg-brand-blue/90 text-white font-black py-1.5 rounded-md flex items-center justify-center gap-0.5 text-[11px] shadow transition-all">
@@ -449,7 +465,29 @@ export default function ChallanEntry() {
             </div>
           </div>
 
-          {/* TABLE DISPLAY */}
+          {/* MOBILE LIST VIEWS */}
+          <div className="block lg:hidden p-2 space-y-2 bg-slate-50">
+            {challansList.map((item, index) => (
+              <div key={index} className="bg-white border border-slate-200 p-2.5 rounded-lg shadow-sm text-xs font-semibold relative text-slate-700">
+                <span className="absolute right-2 top-2 text-[10px] text-slate-400 font-bold font-mono">Sl: #{index + 1}</span>
+                <div className="grid grid-cols-2 gap-y-1">
+                  <p><span className="text-slate-400">Truck:</span> <span className="font-black text-brand-navy">{item.truckNo}</span></p>
+                  <p><span className="text-slate-400">Challan:</span> {item.challanNo}</p>
+                  <p><span className="text-slate-400">Gross Fr:</span> ₹{item.freightAmt}</p>
+                  <p><span className="text-slate-400">Margin:</span> <span className="text-emerald-600 font-bold">₹{item.discountAmt}</span></p>
+                  <p className="col-span-2 text-brand-blue font-black text-xs border-t pt-1.5 mt-1 flex justify-between items-center">
+                    <span>Payable: ₹{item.payableAmt}</span>
+                    <span className="flex gap-1.5">
+                      <button onClick={() => handleEditRow(index)} className="p-1 bg-blue-50 text-brand-blue rounded"><Edit2 size={12}/></button>
+                      <button onClick={() => setChallansList(challansList.filter((_, i) => i !== index))} className="p-1 bg-red-50 text-red-500 rounded"><Trash2 size={12}/></button>
+                    </span>
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* DESKTOP MATRIX TABLE VIEW */}
           <div className="hidden lg:block overflow-x-auto p-3">
             <table className="w-full text-left border-collapse text-[11px]">
               <thead>
@@ -503,7 +541,7 @@ export default function ChallanEntry() {
         </div>
       )}
 
-      {/* 🔥 REINSTATED HISTORICAL RECORDS VAULT (वाउचर इतिहास वापस लाइव किया गया) */}
+      {/* HISTORICAL VAULT */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mt-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b pb-3 mb-3 gap-2">
           <h3 className="text-xs font-black text-brand-navy uppercase flex items-center gap-1.5"><History size={14} className="text-brand-blue" /> Historical Vault Records (वाउचर इतिहास)</h3>
@@ -512,7 +550,7 @@ export default function ChallanEntry() {
             <input type="text" placeholder="Search Voucher Code (FPV-)..." value={historySearchQuery} onChange={(e) => setHistorySearchQuery(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-8 pr-3 text-xs text-brand-navy font-bold focus:outline-none" />
           </div>
         </div>
-        <div className="space-y-2 max-h-60 overflow-y-auto pr-1 scrollbar-none">
+        <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
           {voucherHistory
             .filter(v => v.voucherNo?.toLowerCase().includes(historySearchQuery.toLowerCase()))
             .map((v) => (
@@ -524,35 +562,35 @@ export default function ChallanEntry() {
                   </div>
                   <p className="text-[10px] text-slate-400 mt-1">Party: <span className="text-slate-600 font-bold">{v.partyName}</span> • Entries: {v.items?.length || 0} Logs • Mapped: {new Date(v.createdAt).toLocaleDateString('en-IN')}</p>
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
+                <div className="flex items-center gap-2">
+                  <div className="text-right mr-2">
                     <p className="font-black text-brand-navy text-xs">₹{v.totalPayableToVehicle?.toLocaleString("en-IN")}</p>
                     <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded">Earned: ₹{v.totalDiscountIncome}</span>
                   </div>
-                  <button onClick={() => spoolSilentLandscapePDF(v)} className="p-2 bg-white text-slate-600 border rounded-lg hover:bg-slate-100 flex items-center gap-1 shadow-sm font-bold text-[11px]"><Printer size={13} /> Reprint</button>
+                  <div className="flex gap-1">
+                    <button onClick={() => generateProperPDF(v)} className="p-2 bg-white text-emerald-600 border border-emerald-200 rounded-lg hover:bg-slate-100 flex items-center gap-1 shadow-sm font-bold text-[11px]"><Download size={13} /> Save PDF</button>
+                    <button onClick={() => handleDeleteVoucher(v.id)} className="p-2 bg-white text-red-500 border border-red-200 rounded-lg hover:bg-red-50 flex items-center justify-center shadow-sm"><Trash2 size={13} /></button>
+                  </div>
                 </div>
               </div>
             ))
           }
-          {voucherHistory.filter(v => v.voucherNo?.toLowerCase().includes(historySearchQuery.toLowerCase())).length === 0 && (
-            <p className="text-center text-slate-400 py-6 font-medium italic">No previous voucher codes match your history search parameters.</p>
-          )}
         </div>
       </div>
 
-      {/* MASTER OWNER DIALOG OVERLAY */}
+      {/* OWNER MASTER MODAL */}
       {showAddOwner && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-100 animate-pulse-none">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-100">
             <div className="bg-brand-navy p-3 text-white font-bold text-xs uppercase flex items-center justify-between">
               <span className="flex items-center gap-1"><UserPlus size={14} /> Register Owner Master</span>
               <button onClick={() => { setShowAddOwner(false); setRegisteredTrucks([]); }} className="text-slate-400 hover:text-white"><X size={16} /></button>
             </div>
             <form onSubmit={handleSaveOwnerMaster} className="p-4 space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div><label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Name *</label><input type="text" required placeholder="Rajesh" value={newOwner.name} onChange={(e) => setNewOwner({...newOwner, name: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-xs font-bold text-brand-navy focus:outline-none" /></div>
-                <div><label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Mobile *</label><input type="tel" required maxLength={10} placeholder="10-digit" value={newOwner.mobile} onChange={(e) => setNewOwner({...newOwner, mobile: e.target.value.replace(/\D/g, "")})} className="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-xs font-bold text-brand-navy focus:outline-none" /></div>
-                <div><label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">PAN Number *</label><input type="text" required maxLength={10} placeholder="ABCDE1234F" value={newOwner.pan} onChange={(e) => setNewOwner({...newOwner, pan: e.target.value.toUpperCase()})} className="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-xs font-bold text-brand-navy focus:outline-none uppercase" /></div>
+                <div><label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Name *</label><input type="text" required placeholder="Rajesh" value={newOwner.name} onChange={(e) => setNewOwner({...newOwner, name: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-xs font-bold focus:outline-none" /></div>
+                <div><label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Mobile *</label><input type="tel" required maxLength={10} placeholder="10-digit" value={newOwner.mobile} onChange={(e) => setNewOwner({...newOwner, mobile: e.target.value.replace(/\D/g, "")})} className="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-xs font-bold focus:outline-none" /></div>
+                <div><label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">PAN *</label><input type="text" required maxLength={10} placeholder="ABCDE1234F" value={newOwner.pan} onChange={(e) => setNewOwner({...newOwner, pan: e.target.value.toUpperCase()})} className="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-xs font-bold focus:outline-none uppercase" /></div>
               </div>
               <div className="bg-slate-50 p-2 rounded-lg border border-slate-200">
                 <label className="text-[9px] font-bold text-slate-500 block mb-1">Add Fleet Vehicles</label>
@@ -575,7 +613,7 @@ export default function ChallanEntry() {
         </div>
       )}
 
-      {/* DYNAMIC MASTER PARTY OVERLAY */}
+      {/* PARTY MASTER MODAL */}
       {showAddParty && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl p-4 space-y-4">
